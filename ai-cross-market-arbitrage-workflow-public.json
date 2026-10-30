@@ -1,0 +1,645 @@
+{
+  "name": "Arbitrage Leboncoin France-Maroc",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 4
+            }
+          ]
+        }
+      },
+      "id": "20434fae-c669-42aa-986e-183edebe4d6a",
+      "name": "Toutes les 4 heures",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c1",
+              "name": "marge_min",
+              "value": 130,
+              "type": "number"
+            },
+            {
+              "id": "c2",
+              "name": "taux_dh",
+              "value": 10.8,
+              "type": "number"
+            },
+            {
+              "id": "c3",
+              "name": "budget_max",
+              "value": 1200,
+              "type": "number"
+            },
+            {
+              "id": "c4",
+              "name": "ville",
+              "value": "ile de France",
+              "type": "string"
+            },
+            {
+              "id": "c5",
+              "name": "mots_cles",
+              "value": "macbook air m2, macbook air m3, macbook pro m2, iphone 15 pro, galaxy s25 ultra",
+              "type": "string"
+            },
+            {
+              "id": "c6",
+              "name": "region_code",
+              "value": "r_12",
+              "type": "string"
+            },
+            {
+              "id": "c7",
+              "name": "prix_min",
+              "value": 150,
+              "type": "number"
+            },
+            {
+              "id": "c8",
+              "name": "max_ia",
+              "value": 20,
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "9aa3f980-08aa-4692-8e90-ffb0a1550db9",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        272,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $input.first().json;\nconst kws = String(cfg.mots_cles || '').split(',').map(s => s.trim()).filter(Boolean);\nconst uniq = Array.from(new Set(kws.map(k => k.toLowerCase())));\nreturn uniq.map(k => {\n  const params = ['text=' + encodeURIComponent(k), 'sort=time', 'order=desc'];\n  if (cfg.budget_max) params.push('price=' + (cfg.prix_min || 0) + '-' + cfg.budget_max);\n  if (cfg.region_code) params.push('locations=' + cfg.region_code);\n  return { json: { mot_cle: k, searchUrl: 'https://www.leboncoin.fr/recherche?' + params.join('&') } };\n});"
+      },
+      "id": "3756829b-4eb2-45d5-be19-8557b717e625",
+      "name": "Préparer recherches",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        368
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.apify.com/v2/acts/silentflow~leboncoin-scraper/run-sync-get-dataset-items",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpTemplatedCustomAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ searchUrl: $json.searchUrl, maxItems: 30, browseMode: false }) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1
+            }
+          },
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "timeout": 300000
+        }
+      },
+      "id": "fe4f584c-bae6-46e0-839e-e5658a93138d",
+      "name": "Scraper annonces Leboncoin",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        496,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "REPLACE_WITH_YOUR_GOOGLE_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Annonces"
+        },
+        "options": {}
+      },
+      "id": "9076f632-2a90-4d25-a30b-e9c201a436a5",
+      "name": "Lire historique",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        896,
+        368
+      ],
+      "executeOnce": true,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Config').first().json;\nconst bad = ['hs', 'cassé', 'casse', 'fissuré', 'fissure', 'icloud', 'mdm', 'pour pièces', 'pour pieces', 'bloqué', 'bloque', 'verrouillé', 'verrouille', 'frp'];\nconst acc = ['coque', 'housse', 'chargeur', 'cable', 'câble', 'vitre', 'protection', 'boite vide', 'boîte vide', 'écran seul', 'ecran seul', 'recherche', 'echange', 'échange', 'achète', 'achete'];\nconst kws = String(cfg.mots_cles || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean).map(k => k.split(' ').filter(Boolean));\nconst seen = new Set($input.all().map(i => i.json.lien).filter(Boolean));\nconst hasWord = (text, w) => new RegExp('(^|[^a-zà-ÿ])' + w + '([^a-zà-ÿ]|$)', 'i').test(text);\nconst out = [];\nfor (const i of $('Scraper annonces Leboncoin').all()) {\n  const r = i.json;\n  const url = r.url || r.link || r.ad_url || '';\n  const title = r.title || r.subject || '';\n  const description = r.description || r.body || '';\n  const price = Number(r.price ?? 0) || 0;\n  if (!url || seen.has(url)) continue;\n  const t = title.toLowerCase();\n  if (kws.length && !kws.some(ws => ws.every(w => t.includes(w)))) continue;\n  if (price < (cfg.prix_min || 0)) continue;\n  if (cfg.budget_max && price > cfg.budget_max) continue;\n  if (price < 150 && acc.some(w => hasWord(t, w))) continue;\n  const text = (title + ' ' + description).toLowerCase();\n  if (bad.some(w => hasWord(text, w))) continue;\n  seen.add(url);\n  out.push({ json: {\n    title, price, description, url,\n    city: (typeof r.city === 'string' ? r.city : (r.location && r.location.city) || (r.city && r.city.city)) || '',\n    published_at: r.firstPublicationDate || r.published_at || r.publishedAt || r.first_publication_date || '',\n    shipping: r.shipping ?? r.shipping_possible ?? false,\n  } });\n}\nout.sort((a, b) => String(b.json.published_at).localeCompare(String(a.json.published_at)));\nreturn out.slice(0, cfg.max_ia || 20);"
+      },
+      "id": "6dd4096b-d7f0-444d-bafb-a55eb76eb90f",
+      "name": "Pré-filtre",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Annonce à analyser :\nTitre : {{ $json.title }}\nPrix affiché : {{ $json.price }} €\nDescription : {{ $json.description }}\nVille : {{ $json.city }}\nLien : {{ $json.url }}\nDate de publication : {{ $json.published_at }}\nLivraison possible : {{ $json.shipping }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "Tu es un expert en achat-revente d'occasion (MacBook 2021+, iPhone 12+, Android haut de gamme), France → Maroc.\nOn te donne UNE annonce Leboncoin. Tu ne fais pas de calculs de marge : tu estimes les prix et évalues le risque.\n\nTÂCHES\n1. Identifie l'appareil (modèle, année, puce/processeur, RAM, stockage, couleur). Écris \"à confirmer\" pour tout ce qui n'est pas dans l'annonce. N'invente rien.\n2. Détermine si l'appareil est annoncé FONCTIONNEL. Mets fonctionnel=false s'il y a un doute : écran abîmé, pièce HS, batterie très faible, verrouillage possible (iCloud, MDM, Activation Lock, FRP, opérateur), annonce suspecte.\n3. À l'aide de l'outil recherche_prix, estime :\n   - prix_revente_maroc_dh : prix RÉEL négocié (Avito Maroc, groupes Facebook, boutiques d'occasion), pas le prix affiché\n   - prix_revente_france_eur : prix réellement vendu en France\n   - prix_negocie_eur : prix d'achat réaliste après négociation (-8 à -15 %)\n4. Estime les frais à prévoir : chargeur ou câble manquant (frais_accessoires_eur) et réserve As-Is (reserve_eur).\n5. Évalue le risque : faible / moyen / élevé, avec les points à vérifier.\n\nREPÈRES MAROC À ACTUALISER\nMacBook Air M2 8/256 : 6 500 à 7 500 DH ; MacBook Air M1 : 4 600 à 5 700 DH (reconditionné) ; MacBook Pro 13\" M2 16/256 : 8 500 DH ; iPhone 14 Pro 128 Go : 4 950 à 6 200 DH ; Galaxy S25 Ultra 512 Go : 8 200 DH ; S23 Ultra 256 Go : 5 000 DH.\n\nRÈGLES\n- Ne confonds jamais prix affiché et prix réellement vendu.\n- Si tu ne trouves pas de prix fiable, mets null et confiance=\"faible\".\n- Réponds uniquement avec le JSON demandé, sans texte autour.",
+          "maxIterations": 6
+        }
+      },
+      "id": "03bdfe25-1b81-4d22-9b71-f0233b3bad1d",
+      "name": "Agent estimation",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        1040,
+        112
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "id",
+          "value": "claude-sonnet-5-5",
+          "cachedResultName": "Claude Sonnet 5.5"
+        },
+        "options": {}
+      },
+      "id": "ae27db7c-bf72-449e-bd43-4c9474b7ce7f",
+      "name": "Claude",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.6,
+      "position": [
+        976,
+        336
+      ]
+    },
+    {
+      "parameters": {
+        "query": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('query', 'Requête de recherche web (max 400 caractères), ex : prix occasion iphone 15 pro 256 go avito maroc') }}",
+        "count": 8,
+        "additionalParameters": {
+          "country": "FR",
+          "search_lang": "fr"
+        }
+      },
+      "id": "4046ce17-297d-476b-b59e-25bc54519aed",
+      "name": "recherche_prix",
+      "type": "@brave/n8n-nodes-brave-search.braveSearchTool",
+      "typeVersion": 1.1,
+      "position": [
+        1104,
+        336
+      ]
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\"type\": \"object\", \"properties\": {\"appareil\": {\"type\": \"string\"}, \"annee\": {\"type\": [\"string\", \"null\"]}, \"config\": {\"type\": \"string\"}, \"fonctionnel\": {\"type\": \"boolean\"}, \"risque\": {\"type\": \"string\", \"enum\": [\"faible\", \"moyen\", \"élevé\"]}, \"points_a_verifier\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}}, \"prix_negocie_eur\": {\"type\": [\"number\", \"null\"]}, \"prix_revente_maroc_dh\": {\"type\": [\"number\", \"null\"]}, \"prix_revente_france_eur\": {\"type\": [\"number\", \"null\"]}, \"frais_accessoires_eur\": {\"type\": [\"number\", \"null\"]}, \"reserve_eur\": {\"type\": [\"number\", \"null\"]}, \"confiance\": {\"type\": \"string\"}, \"lien\": {\"type\": \"string\"}}, \"required\": [\"appareil\", \"fonctionnel\", \"risque\"]}"
+      },
+      "id": "a5c9080d-cef6-47b0-8fee-fb5876faeb01",
+      "name": "Parser JSON",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        1232,
+        336
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Config').first().json;\nreturn $input.all().map(i => {\n  const d = i.json.output ?? i.json;\n  const num = v => (typeof v === 'number' && isFinite(v) ? v : null);\n  const prix = num(d.prix_negocie_eur);\n  const reventeDh = num(d.prix_revente_maroc_dh);\n  const reventeFr = num(d.prix_revente_france_eur);\n  if (prix === null || (reventeDh === null && reventeFr === null)) {\n    return { json: { ...d, lien: d.lien || $('Boucle annonces').last().json.url, marge_nette_eur: null, garder: false } };\n  }\n  const transportMA = String(d.appareil || '').toLowerCase().includes('macbook') ? 25 : 10;\n  const cout = prix + (num(d.frais_accessoires_eur) ?? 0) + (num(d.reserve_eur) ?? 0) + transportMA;\n  const margeMA = reventeDh === null ? -Infinity : reventeDh / cfg.taux_dh - cout;\n  const margeFR = reventeFr === null ? -Infinity : reventeFr - cout;\n  const meilleure = Math.max(margeMA, margeFR);\n  return { json: { ...d, lien: $('Boucle annonces').last().json.url,\n    points_a_verifier: Array.isArray(d.points_a_verifier) ? d.points_a_verifier : [],\n    cout_total_eur: +cout.toFixed(0),\n    marge_maroc_eur: isFinite(margeMA) ? +margeMA.toFixed(0) : null,\n    marge_maroc_dh: isFinite(margeMA) ? +(margeMA * cfg.taux_dh).toFixed(0) : null,\n    marge_france_eur: isFinite(margeFR) ? +margeFR.toFixed(0) : null,\n    marge_nette_eur: +meilleure.toFixed(0),\n    garder: d.fonctionnel === true && d.risque !== 'élevé' && meilleure >= cfg.marge_min } };\n});"
+      },
+      "id": "e5428ca0-fbd5-46a5-95a6-0d1cb24be366",
+      "name": "Calcul marge",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "REPLACE_WITH_YOUR_GOOGLE_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Annonces"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "date": "={{ $now.toISO() }}",
+            "appareil": "={{ $json.appareil }}",
+            "config": "={{ $json.config }}",
+            "prix_negocie_eur": "={{ $json.prix_negocie_eur }}",
+            "cout_total_eur": "={{ $json.cout_total_eur }}",
+            "marge_nette_eur": "={{ $json.marge_nette_eur }}",
+            "risque": "={{ $json.risque }}",
+            "garder": "={{ $json.garder }}",
+            "lien": "={{ $json.lien }}"
+          },
+          "schema": [
+            {
+              "id": "date",
+              "displayName": "date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "appareil",
+              "displayName": "appareil",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "config",
+              "displayName": "config",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "prix_negocie_eur",
+              "displayName": "prix_negocie_eur",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "cout_total_eur",
+              "displayName": "cout_total_eur",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "marge_nette_eur",
+              "displayName": "marge_nette_eur",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "risque",
+              "displayName": "risque",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "garder",
+              "displayName": "garder",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "lien",
+              "displayName": "lien",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "bac87a97-bafb-46c1-a782-3111c3a5c34f",
+      "name": "Historique Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        2160,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "k1",
+              "leftValue": "={{ $json.garder }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "9f84b0fe-aeb6-4ed7-9c67-1438fbabccb7",
+      "name": "Bonne affaire ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1664,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "REPLACE_WITH_YOUR_TELEGRAM_CHAT_ID",
+        "text": "={{ $json.appareil }} {{ $json.config }}\nPrix négocié : {{ $json.prix_negocie_eur }} € | Coût total : {{ $json.cout_total_eur }} €\nRevente Maroc : {{ $json.prix_revente_maroc_dh }} DH | Marge : {{ $json.marge_nette_eur }} €\nRisque : {{ $json.risque }} | À vérifier : {{ $json.points_a_verifier.join(\", \") }}\n{{ $json.lien }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_web_page_preview": true,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "69cf343a-fb47-4c08-95d6-c6839f886b48",
+      "name": "Alerte Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1936,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "97561457-1428-42ed-b721-8e793a5a1efa",
+      "name": "Boucle annonces",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        752,
+        352
+      ]
+    }
+  ],
+  "connections": {
+    "Toutes les 4 heures": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Préparer recherches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Préparer recherches": {
+      "main": [
+        [
+          {
+            "node": "Scraper annonces Leboncoin",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scraper annonces Leboncoin": {
+      "main": [
+        [
+          {
+            "node": "Lire historique",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lire historique": {
+      "main": [
+        [
+          {
+            "node": "Pré-filtre",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pré-filtre": {
+      "main": [
+        [
+          {
+            "node": "Boucle annonces",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent estimation": {
+      "main": [
+        [
+          {
+            "node": "Calcul marge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agent estimation",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "recherche_prix": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agent estimation",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parser JSON": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Agent estimation",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calcul marge": {
+      "main": [
+        [
+          {
+            "node": "Historique Sheets",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Bonne affaire ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bonne affaire ?": {
+      "main": [
+        [
+          {
+            "node": "Alerte Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Boucle annonces",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alerte Telegram": {
+      "main": [
+        [
+          {
+            "node": "Boucle annonces",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Boucle annonces": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Agent estimation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "nodeGroups": [
+    {
+      "id": "ea4183a4-204c-437d-ad88-aa5461a4ed23",
+      "name": "Collecter annonces",
+      "nodeIds": [
+        "9aa3f980-08aa-4692-8e90-ffb0a1550db9",
+        "3756829b-4eb2-45d5-be19-8557b717e625",
+        "fe4f584c-bae6-46e0-839e-e5658a93138d",
+        "9076f632-2a90-4d25-a30b-e9c201a436a5",
+        "6dd4096b-d7f0-444d-bafb-a55eb76eb90f"
+      ],
+      "description": "Toutes les 4 h : paramètres, scraping Leboncoin, retrait des doublons et des annonces HS ou verrouillées"
+    },
+    {
+      "id": "1548a140-30c1-4ddf-87db-2f7bdf7a0936",
+      "name": "Estimer et calculer",
+      "nodeIds": [
+        "03bdfe25-1b81-4d22-9b71-f0233b3bad1d",
+        "ae27db7c-bf72-449e-bd43-4c9474b7ce7f",
+        "4046ce17-297d-476b-b59e-25bc54519aed",
+        "a5c9080d-cef6-47b0-8fee-fb5876faeb01",
+        "e5428ca0-fbd5-46a5-95a6-0d1cb24be366"
+      ],
+      "description": "L'IA identifie l'appareil, estime les prix de revente et le risque ; le code calcule la marge nette"
+    }
+  ],
+  "tags": []
+}
